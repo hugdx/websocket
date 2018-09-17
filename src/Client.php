@@ -7,14 +7,27 @@ class Client
     use Base {
         Base::send as protected _send;
     }
+
+    /**
+     * @var resource|null
+     */
     protected $socket = null;
-    protected $message = null;
+
+    /**
+     * @var callable|null
+     */
     protected $tick = null;
+
+    /**
+     * @var callable[]
+     */
+    protected $callbacks = [];
 
     /**
      * Create an instance.
      * @param  string      $address address to bind to, defaults to `"ws://127.0.0.1:8080"`
      * @param  array       $headers optional array of headers to pass when connecting
+     * @throws WebSocketException
      */
     public function __construct($address = 'ws://127.0.0.1:8080', array $headers = [])
     {
@@ -97,7 +110,7 @@ class Client
      */
     public function onMessage(callable $callback)
     {
-        $this->message = $callback;
+        $this->callbacks['message'] = $callback;
 
         return $this;
     }
@@ -129,6 +142,7 @@ class Client
      */
     public function run()
     {
+        $disconnected = false;
         while (true) {
             if (isset($this->tick)) {
                 if (call_user_func($this->tick, $this) === false) {
@@ -142,14 +156,38 @@ class Client
                 foreach ($changed as $socket) {
                     try {
                         $message = $this->receive($socket);
-                        if (isset($this->message)) {
-                            call_user_func($this->message, $message, $this);
+                        if (isset($this->callbacks['message'])) {
+                            call_user_func($this->callbacks['message'], $message, $this);
                         }
                     } catch (WebSocketException $ignore) {
+                        @fclose($this->socket);
+                        $disconnected = true;
+                        if (isset($this->callbacks['disconnect'])) {
+                            call_user_func($this->callbacks['disconnect'], $this);
+                        }
+                        break;
                     }
                 }
             }
+            if ($disconnected) {
+                break;
+            }
             usleep(5000);
         }
+    }
+
+    /**
+     * Set a callback to execute when connection is disconnected
+     *
+     * The callable will receive:
+     *  - the current client instance
+     * @param  callable     $callback the callback
+     * @return $this
+     */
+    public function onDisconnect(callable $callback) : Client
+    {
+        $this->callbacks['disconnect'] = $callback;
+
+        return $this;
     }
 }
